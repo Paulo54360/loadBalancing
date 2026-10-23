@@ -1,40 +1,24 @@
-# Reverse Proxy, Load Balancing & API Gateway (TP 1, TP 2, TP 3)
+# Reverse Proxy, Load Balancing & Kubernetes Networking (TP 1, TP 2, TP 3, TP 4)
 
-Dépôt complet des travaux pratiques sur les architectures de services, le reverse proxy, le load balancing et l'API Gateway avec **Traefik**, **Nginx**, **FastAPI**, **Docker Compose** et **GitLab CI/CD**.
+Dépôt complet des travaux pratiques sur les architectures de services, le reverse proxy, le load balancing, l'API Gateway et le Networking Kubernetes avec **Traefik**, **Nginx**, **FastAPI**, **Docker Compose**, **GitLab CI/CD**, **Kind**, **Kubernetes** et **Envoy Gateway**.
 
 ```text
 .
 ├── README.md
 ├── traefik-tp/               # TP 1 : Reverse Proxy & Load Balancing avec Traefik
-│   ├── docker-compose.yml
-│   ├── config/
-│   │   └── traefik.yaml
-│   ├── app1/
-│   ├── app1b/
-│   └── app2/
 ├── tp2-load-balancer/        # TP 2 : Load Balancer avec Nginx & algorithmes
-│   ├── docker-compose.yml
-│   └── nginx/
-│       └── nginx.conf
-└── eshop-api/                # TP 3 : API Gateway, BFF & Microservices sécurisés
-    ├── users/
-    │   ├── main.py
-    │   ├── requirements.txt
-    │   └── Dockerfile
-    ├── orders/
-    │   ├── main.py
-    │   ├── requirements.txt
-    │   └── Dockerfile
-    ├── gateway/
-    │   ├── main.py
-    │   ├── requirements.txt
-    │   └── Dockerfile
-    ├── tests/
-    │   └── test_gateway.py
-    ├── docker-compose.yml
-    ├── .dockerignore
-    ├── .gitignore
-    └── .gitlab-ci.yml
+├── eshop-api/                # TP 3 : API Gateway, BFF & Microservices sécurisés
+└── tp4-kubernetes/           # TP 4 : Networking Kubernetes, Services, NetworkPolicy, Envoy Gateway API
+    ├── 00-gatewayclass.yaml
+    ├── 01-nginx-deployment.yaml
+    ├── 02-nginx-service.yaml
+    ├── 03-nginx-network-policy.yaml
+    ├── 04-eshop-gateway.yaml
+    ├── 05-eshop-route.yaml
+    ├── 06-catalog-app.yaml
+    ├── 07-eshop-catalog-route.yaml
+    ├── 08-nginx-defi3-policy.yaml
+    └── COMPTE_RENDU_TP4.md
 ```
 
 ---
@@ -259,3 +243,43 @@ curl http://app2.localhost
 * **Dashboard Traefik** : [http://localhost:8080/dashboard/](http://localhost:8080/dashboard/)
 * **Découverte automatique Docker** via `/var/run/docker.sock` et labels.
 * **Load Balancing** entre `app1` et `app1b`.
+
+---
+
+# TP 4 — Networking Kubernetes : Pods, Services, NetworkPolicy, Ingress et Gateway API
+
+Le compte-rendu complet et les preuves détaillées se trouvent dans [`tp4-kubernetes/COMPTE_RENDU_TP4.md`](tp4-kubernetes/COMPTE_RENDU_TP4.md).
+
+## Démarrage rapide
+
+```bash
+# 1. Création du cluster Kind et namespace
+kind create cluster --name eshop
+kubectl create namespace demo
+
+# 2. Déploiement NGINX et Service ClusterIP
+kubectl apply -f tp4-kubernetes/01-nginx-deployment.yaml
+kubectl apply -f tp4-kubernetes/02-nginx-service.yaml
+
+# 3. Installation d'Envoy Gateway via Helm OCI
+helm install eg oci://docker.io/envoyproxy/gateway-helm \
+  --version v1.9.2 \
+  --namespace envoy-gateway-system \
+  --create-namespace
+
+# 4. Déclaration GatewayClass, Gateway et HTTPRoute
+kubectl apply -f tp4-kubernetes/00-gatewayclass.yaml
+kubectl apply -f tp4-kubernetes/04-eshop-gateway.yaml
+kubectl apply -f tp4-kubernetes/05-eshop-route.yaml
+
+# 5. Déploiement des défis pratiques (Second service, route /catalog et NetworkPolicy sécurisée)
+kubectl apply -f tp4-kubernetes/06-catalog-app.yaml
+kubectl apply -f tp4-kubernetes/07-eshop-catalog-route.yaml
+kubectl apply -f tp4-kubernetes/08-nginx-defi3-policy.yaml
+
+# 6. Test d'accès via le proxy Envoy
+PROXY_SVC=$(kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=eshop-gateway -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward -n envoy-gateway-system service/$PROXY_SVC 8080:80 &
+curl -i -H 'Host: shop.example.com' http://localhost:8080/
+curl -i -H 'Host: shop.example.com' http://localhost:8080/catalog
+```
