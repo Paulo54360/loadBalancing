@@ -1,202 +1,185 @@
-# TP 1 — Reverse Proxy et Load Balancing avec Traefik et Docker
+# Reverse Proxy & Load Balancing (TP 1 & TP 2)
 
-Ce projet implémente le TP complet de mise en place d'un reverse proxy et d'un répartiteur de charge (Load Balancer) avec **Traefik** et **Docker**, basé sur le cours Reverse Proxy (Mohammad Jabbari).
-
----
-
-## 1. Structure du projet
+Dépôt des travaux pratiques sur le Reverse Proxy et le Load Balancing avec **Traefik**, **Nginx** et **Docker**, basé sur le cours Reverse Proxy (Mohammad Jabbari).
 
 ```text
 .
 ├── README.md
-└── traefik-tp/
+├── traefik-tp/               # TP 1 : Traefik & Docker
+│   ├── docker-compose.yml
+│   ├── config/
+│   │   └── traefik.yaml
+│   ├── app1/
+│   │   └── index.html
+│   ├── app1b/
+│   │   └── index.html
+│   └── app2/
+│       └── index.html
+└── tp2-load-balancer/        # TP 2 : Nginx Load Balancer
     ├── docker-compose.yml
-    ├── config/
-    │   └── traefik.yaml
-    ├── app1/
-    │   └── index.html
-    ├── app1b/
-    │   └── index.html
-    └── app2/
-        └── index.html
+    └── nginx/
+        └── nginx.conf
 ```
+
+---
+
+# TP 2 — Mise en place d’un Load Balancer avec Nginx et Docker
+
+## 1. Architecture
+
+```text
+               Client (curl / navigateur)
+                          │
+                   Port 8080 hôte
+                          │
+                          ▼
+            ┌───────────────────────────┐
+            │   Nginx (Load Balancer)   │
+            └─────────────┬─────────────┘
+       ┌──────────────────┼──────────────────┐
+       ▼                  ▼                  ▼
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│  backend1    │   │  backend2    │   │  backend3    │
+│  (port 5678) │   │  (port 5678) │   │  (port 5678) │
+└──────────────┘   └──────────────┘   └──────────────┘
+```
+
+* Le client envoie toutes ses requêtes à un point d'entrée unique (`http://localhost:8080`).
+* Nginx distribue les requêtes vers les 3 backends `http-echo` sur le réseau privé créé par Docker Compose.
+* Les backends ne publient aucun port sur la machine hôte.
 
 ---
 
 ## 2. Démarrage rapide (KISS)
 
-### Étape 1 : Créer le réseau Docker partagé (si non existant)
+### Étape 1 : Lancer l'environnement
 ```bash
-docker network create frontend
-```
-
-### Étape 2 : Lancer l'environnement
-```bash
-cd traefik-tp
+cd tp2-load-balancer
 docker compose up -d
 ```
 
-### Étape 3 : Tester le routage et le Load Balancing
+### Étape 2 : Tester la répartition Round Robin
 ```bash
-# Test du routage vers App1 (avec alternance Load Balancing entre App1 et App1b)
+for i in $(seq 1 9); do curl -s http://localhost:8080; done
+```
+*Résultat :* distribution équitable entre `backend 1`, `backend 2` et `backend 3`.
+
+### Étape 3 : Arrêt des conteneurs
+```bash
+docker compose down
+```
+
+---
+
+## 3. Synthèse des algorithmes de Load Balancing testés
+
+| Algorithme | Directive Nginx | Critère principal | Disponible en Nginx Open Source |
+| :--- | :--- | :--- | :--- |
+| **Round Robin** | *(défaut)* | Alternance cyclique entre les serveurs | Oui |
+| **Weighted Round Robin** | `weight=X` | Alternance proportionnelle aux capacités | Oui |
+| **Least Connections** | `least_conn;` | Serveur ayant le moins de connexions actives | Oui |
+| **Weighted Least Connections** | `least_conn;` + `weight=X` | Ratio connexions actives / poids | Oui |
+| **IP Hash** | `ip_hash;` | Même adresse IP client vers le même backend | Oui |
+| **Random** | `random;` | Tirage aléatoire indépendant à chaque requête | Oui |
+| **Least Response Time** | `least_time header;` | Temps de réponse et nombre de connexions | **Non** (Nginx Plus uniquement) |
+| **Sticky Cookie** | `sticky cookie ...` | Persistance de session par cookie applicatif | **Non** (Nginx Plus uniquement) |
+| **Rate Limiting** | `limit_req_zone` + `limit_req` | Contrôle et limitation du débit de requêtes | Oui |
+
+---
+
+## 4. Réponses aux Questions du TP 2 (Étape 17 — À rendre)
+
+1. **Quelle est la différence entre un reverse proxy et un Load Balancer ?**  
+   - Le **reverse proxy** est un intermédiaire général qui s'interpose devant les serveurs pour centraliser l'accès, terminer le TLS, gérer la sécurité (WAF, headers) ou router selon le domaine/chemin.  
+   - Le **Load Balancer** a pour objectif spécifique de distribuer la charge entre plusieurs instances exécutant le même service afin d'éviter la surcharge et d'optimiser les performances. Nginx et Traefik cumulent les deux rôles.
+
+2. **Quel est le rôle du bloc `upstream` dans Nginx ?**  
+   Il définit un pool logique de serveurs backend avec leurs adresses/ports internes et permet de spécifier l'algorithme de répartition de charge ainsi que les options associées (`weight`, `backup`, `max_fails`, etc.).
+
+3. **Pourquoi les backends peuvent-ils communiquer avec Nginx sans publier leurs ports sur la machine ?**  
+   Parce que Docker Compose crée un réseau virtuel partagé (bridge). À l'intérieur de ce réseau, Nginx et les conteneurs backend communiquent directement via leurs adresses IP privées et leurs noms de service DNS internes (`backend1:5678`). Les ports n'ont pas besoin d'être exposés sur la machine hôte.
+
+4. **Quelle est la différence entre Round Robin et Weighted Round Robin ?**  
+   - *Round Robin* traite chaque serveur de façon équivalente et distribue les requêtes de manière égale en cycle (1-2-3-1-2-3).  
+   - *Weighted Round Robin* attribue un poids (`weight=N`) à chaque serveur pour refléter une différence de capacité matérielle (CPU/RAM). Un serveur de poids 3 recevra 3 fois plus de requêtes qu'un serveur de poids 1.
+
+5. **Dans quel cas l’algorithme `least_conn` est-il pertinent ?**  
+   Lorsque les requêtes ont des temps d'exécution très inégaux (ex: téléchargements lourds, calculs complexes, websockets). Le Round Robin risquerait de surcharger un serveur déjà occupé par des requêtes longues, alors que `least_conn` achemine les nouveaux flux vers le serveur le plus disponible.
+
+6. **Quel est l’objectif d’`ip_hash` ?**  
+   Assurer une persistance de session basique en garantissant qu'un client (identifié par son adresse IP) soit toujours dirigé vers la même instance backend, évitant de perdre des données de session stockées localement en mémoire.
+
+7. **Que se passe-t-il lorsqu’on arrête le backend 2 ?**  
+   Lors de la première tentative vers le backend arrêté, la connexion échoue ou timeout. Nginx détecte passivement l'erreur (`max_fails` atteint), bascule la requête sur un autre serveur valide (`backend 1` ou `backend 3`), et marque temporairement `backend 2` comme indisponible pendant `fail_timeout` (10s par défaut).
+
+8. **Pourquoi un Load Balancer ne suffit-il pas à garantir une haute disponibilité complète ?**  
+   - Le Load Balancer lui-même constitue un point unique de défaillance (**SPOF**) s'il n'est pas lui-même redondé (ex: VRRP / Keepalived ou DNS Anycast).  
+   - Si tous les backends plantent ou si la base de données centrale tombe, le load balancer ne peut plus rien servir.  
+   - Sans contrôles de santé actifs (*active health checks*), le client peut subir des lenteurs ou erreurs temporaires lors d'une panne.
+
+9. **Quelle est la différence entre Load Balancing et Session Persistence ?**  
+   - Le **Load Balancing** vise à disperser le trafic uniformément entre les serveurs.  
+   - La **Session Persistence** contraint au contraire un même utilisateur à rester lié au même serveur pour maintenir son état applicatif.
+
+10. **Pourquoi `ip_hash` peut-il être moins fiable lorsque plusieurs utilisateurs partagent la même adresse IP publique ?**  
+    Derrière un NAT d'entreprise, un proxy d'école ou un réseau 4G/5G mobile, des centaines d'utilisateurs distincts ont la même adresse IP publique. Avec `ip_hash`, tout ce groupe sera dirigé vers un seul et même serveur, créant un fort déséquilibre de charge.
+
+11. **Pourquoi une session stockée uniquement en mémoire peut-elle poser problème si le backend tombe en panne ?**  
+    Si le backend stocke la session en RAM et s'arrête brutalement, la session est irrémédiablement perdue (panier vidé, utilisateur déconnecté). En production, on utilise un magasin de sessions externe partagé (ex: Redis, Memcached ou base de données).
+
+12. **Quelle est la différence entre la persistance par IP et la persistance par cookie ?**  
+    - *Persistance par IP (`ip_hash`)* : Basée sur l'adresse IP réseau de la requête. Problématique en cas de NAT partagé ou d'IP dynamique.  
+    - *Persistance par cookie (`sticky cookie`)* : Basée sur un cookie HTTP injecté dans le navigateur. Beaucoup plus fine et précise, car elle identifie réellement le client navigateur même si plusieurs personnes partagent la même adresse IP.
+
+---
+
+## 5. Réponses aux Questions Intermédiaires du Cours
+
+* **Étape 11 (Random) : Pourquoi Random ne garantit-il pas une répartition égale sur 10 requêtes ?**  
+  Parce que chaque tirage est indépendant au sens probabiliste. Sur un faible échantillon (10 requêtes), la variance est élevée. La convergence vers l'équiprobabilité (1/3) n'apparaît que sur la loi des grands nombres (des centaines ou milliers de requêtes).
+* **Étape 12 (Weighted Least Connections) : Pourquoi un serveur à poids élevé peut-il être moins sollicité s'il a beaucoup de connexions ?**  
+  L'algorithme compare le ratio `connexions_actives / poids`. Si le serveur de poids 3 a déjà 6 connexions (ratio 2) alors que le serveur de poids 1 a 0 connexion (ratio 0), la nouvelle requête ira vers le serveur à 0 connexion malgré son poids inférieur.
+* **Étape 13.3 (Least Response Time) :**  
+  1. *Pourquoi le nombre de connexions ne suffit pas ?* Deux serveurs peuvent avoir 10 connexions chacun, mais un serveur peut être sur un CPU lent et répondre en 800ms tandis que l'autre répond en 50ms.  
+  2. *Least Connections vs Least Response Time :* Least Conn s'intéresse au nombre de requêtes en cours ; Least Response Time mesure le temps réel nécessaire pour répondre (latence).  
+  3. *Pourquoi `least_time` ne fonctionne pas en Nginx Open Source ?* Il s'agit d'un module propriétaire exclusif à Nginx Plus.
+* **Étape 14.4 (Rate Limiting) :**  
+  1. *Différence entre `rate=5r/s` et `burst=10` :* `rate=5r/s` impose le rythme moyen soutenable (1 requête toutes les 200ms). Le `burst=10` autorise un pic temporaire de 10 requêtes simultanées au-delà de ce rythme.  
+  2. *Pourquoi le Rate Limiting protège une API ?* Il protège les backends contre les attaques DoS/brute-force, le scraping abusif et les boucles infinies de clients défaillants.  
+  3. *Pourquoi la limite par IP peut être insuffisante ?* En cas de NAT, tous les utilisateurs légitimes d'une même entreprise partagent le même quota et peuvent être bloqués collectivement. Une limitation par clé d'API (API Key) ou jeton JWT est souvent préférable.
+
+---
+
+## 6. Exercice Bonus : Backends principaux et serveur de secours (`backup`)
+
+Dans Nginx, le mot-clé `backup` marque un serveur qui ne recevra aucune requête tant qu'au moins l'un des serveurs principaux est opérationnel.
+
+Configuration dans `nginx.conf` :
+```nginx
+upstream backend_pool {
+    server backend1:5678;
+    server backend2:5678;
+    server backend3:5678 backup; # Secours uniquement
+}
+```
+*Comportement vérifié :*
+- En fonctionnement normal : seules les instances `backend1` et `backend2` reçoivent le trafic (50/50).
+- Si `backend1` et `backend2` tombent en panne : Nginx bascule automatiquement 100% des requêtes sur `backend3`.
+
+---
+
+# TP 1 — Reverse Proxy et Load Balancing avec Traefik et Docker
+
+*(Voir section précédente ci-dessous pour l'historique complet du TP 1)*
+
+## Démarrage rapide TP 1
+```bash
+docker network create frontend  # si pas déjà créé
+cd traefik-tp
+docker compose up -d
 for i in $(seq 1 4); do curl -s http://app1.localhost; done
-
-# Test du routage vers App2
 curl -s http://app2.localhost
-
-# Dashboard Traefik
-open http://localhost:8080/dashboard/
 ```
-
----
-
-## 3. Réponses aux Exercices Pratiques (Section 18)
-
-### Exercice 1 — Déploiement initial
-1. **Création du réseau :** `docker network create frontend`.
-2. **Déploiement de Traefik :** Configuré dans `docker-compose.yml` avec l'entrypoint `web` (:80), `websecure` (:443) et le port d'administration `8080` lié à `127.0.0.1`.
-3. **Accès au Dashboard :** Accessible sur `http://localhost:8080/dashboard/`.
-4. **Ports exposés :** Seul Traefik expose des ports sur l'hôte (`80`, `443`, `127.0.0.1:8080`). Les conteneurs Nginx restent isolés sur le réseau Docker `frontend`.
-5. **Différence entre un EntryPoint et un Router :**
-   - **EntryPoint :** Définit la porte d'entrée réseau (port d'écoute et protocole, ex: port 80 pour HTTP).
-   - **Router :** Règle d'aiguillage qui analyse la requête arrivant sur un entrypoint (ex: en-tête `Host: app1.localhost`) et décide vers quel service la transmettre.
-
----
-
-### Exercice 2 — Routage par nom d'hôte
-1. **Déploiement :** `app1` et `app2` démarrent sur le réseau `frontend`.
-2. **Labels utilisés :**
-   - `traefik.enable=true` : autorise explicitement Traefik à prendre en compte le conteneur.
-   - `traefik.http.routers.<app>.rule=Host('<app>.localhost')` : route selon le nom d'hôte HTTP.
-   - `traefik.http.routers.<app>.entrypoints=web` : écoute sur le port 80.
-   - `traefik.http.services.<app>.loadbalancer.server.port=80` : indique le port interne du conteneur Nginx.
-3. **Tests :**
-   - `curl http://app1.localhost` -> Réponse de App1.
-   - `curl http://app2.localhost` -> Réponse de App2.
-4. **Observation :** Les routers `app1@docker` et `app2@docker` ainsi que leurs services associés apparaissent actifs dans le dashboard Traefik.
-
----
-
-### Exercice 3 — Load Balancing
-1. **Ajout de l'instance B :** Conteneur `app1b` ajouté avec les mêmes labels de router et de service (`app1`) que `app1`.
-2. **Contenu distinct :**
-   - `app1` -> `<h1>App1 - Bonjour depuis App1</h1>`
-   - `app1b` -> `<h1>Bonjour depuis App1 - Instance B</h1>`
-3. **Vérification Dashboard / API :** Le service `app1@docker` regroupe désormais 2 serveurs (`http://172.26.0.2:80` et `http://172.26.0.4:80`).
-4. **Test en boucle :**
-   ```bash
-   for i in $(seq 1 6); do curl -s http://app1.localhost; done
-   ```
-   *Résultat :* alternance Round-Robin (50% instance A, 50% instance B).
-5. **Différence entre Routage et Load Balancing :**
-   - Le **routage** sélectionne l'application destinatrice en fonction de règles (ex: `Host`, `PathPrefix`).
-   - Le **Load Balancing** distribue le trafic entre plusieurs instances identiques d'un même service applicatif pour absorber la charge et améliorer la disponibilité.
-
----
-
-### Exercice 4 — Sécurité
-1. **Risque de `api.insecure: true` :** Expose l'API d'administration et le dashboard sans mot de passe sur le port 8080. N'importe qui sur le réseau peut analyser les routes, les backends et l'infrastructure interne.
-2. **Sensibilité du socket Docker (`/var/run/docker.sock`) :** Donner l'accès au socket Docker équivaut à donner les droits root sur l'hôte. Un attaquant qui compromettrait Traefik pourrait piloter le démon Docker et s'échapper du conteneur.
-3. **Approche pour protéger le dashboard :**
-   - Désactiver `insecure: true`.
-   - Exposer le dashboard via un router sécurisé HTTPS avec un middleware d'authentification (`BasicAuth` ou OAuth/ForwardAuth) et une restriction d'adresses IP (`ipWhiteList`).
-4. **Intérêt de `traefik.enable=true` (`exposedByDefault: false`) :** Principe du moindre privilège : évite d'exposer publiquement par erreur des conteneurs internes ou des bases de données.
-5. **TLS activé vs Certificat valide :**
-   - *TLS activé* : le flux est chiffré, mais le certificat peut être auto-signé (alerte de sécurité dans le navigateur).
-   - *Certificat valide* : certificat signé par une autorité reconnue (ex: Let's Encrypt), vérifié pour le nom de domaine et sans avertissement pour l'utilisateur.
-
----
-
-### Exercice 5 — Évolution de l'architecture
-
-Pour répondre aux besoins cibles (3 applications, 2 backends pour l'application principale, HTTPS, middleware d'auth, health check et dashboard sécurisé) :
-
-#### Schéma d'architecture
-```text
-                  Clients (Internet)
-                          │
-                   Ports :80 / :443
-                          │
-                          ▼
-                 ┌──────────────────┐
-                 │  Traefik Proxy   │ ◄─── Dashboard (Protégé par BasicAuth)
-                 └────────┬─────────┘
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
- ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
- │ Application1 │  │ Application2 │  │ Application3 │
- │ (2 instances │  │  (1 instance)│  │  (1 instance)│
- │ Load Balanced│  └──────────────┘  └──────────────┘
- │ + HealthCheck│
- └──────────────┘
-```
-
-#### Configuration des labels d'évolution (Exemple app1 sécurisée) :
-```yaml
-labels:
-  - "traefik.enable=true"
-  # Route HTTPS
-  - "traefik.http.routers.app1.rule=Host(`app1.example.com`)"
-  - "traefik.http.routers.app1.entrypoints=websecure"
-  - "traefik.http.routers.app1.tls=true"
-  - "traefik.http.routers.app1.tls.certresolver=letsencrypt"
-  # Redirection HTTP vers HTTPS automatique
-  - "traefik.http.routers.app1-http.rule=Host(`app1.example.com`)"
-  - "traefik.http.routers.app1-http.entrypoints=web"
-  - "traefik.http.routers.app1-http.middlewares=redirect-to-https"
-  - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
-  # Health Check du service
-  - "traefik.http.services.app1.loadbalancer.server.port=80"
-  - "traefik.http.services.app1.loadbalancer.healthcheck.path=/"
-  - "traefik.http.services.app1.loadbalancer.healthcheck.interval=10s"
-```
-
----
-
-## 4. Réponses aux 15 Questions de Compréhension (Section 19)
-
-1. **Qu’est-ce qu’un reverse proxy ?**  
-   C'est un serveur intermédiaire placé devant les serveurs web/applicatifs qui reçoit les requêtes des clients et les achemine vers le bon backend.
-
-2. **Quelle est la différence entre un reverse proxy et un Load Balancer ?**  
-   Le reverse proxy gère le point d'entrée, le routage logique, la terminaison TLS et la sécurité. Le Load Balancer répartit la charge entre plusieurs serveurs d'une même application. Traefik cumule les deux rôles.
-
-3. **Quel est le rôle de Traefik dans une architecture Docker ?**  
-   Il agit comme reverse proxy dynamique : il écoute le démon Docker pour détecter automatiquement l'apparition et la disparition des conteneurs et met à jour ses règles de routage sans redémarrage.
-
-4. **Quelle est la différence entre la configuration statique et dynamique ?**  
-   - *Statique* : définie au démarrage de Traefik (entrypoints, providers, logs).
-   - *Dynamique* : règles de routage, services et middlewares découverts en continu via les providers (labels Docker).
-
-5. **À quoi sert un provider ?**  
-   C'est une source de données (Docker, Kubernetes, fichiers) permettant à Traefik de découvrir les services et de générer sa configuration dynamique.
-
-6. **Quel est le rôle d’un entrypoint ?**  
-   Il définit un port d'écoute réseau sur Traefik (ex: `:80` pour HTTP, `:443` pour HTTPS).
-
-7. **Quelle est la différence entre un router et un service ?**  
-   Le router décide *où* envoyer une requête selon des règles (`Host`, `Path`) ; le service définit la *destination* réelle (adresses IP et ports des conteneurs) et la façon de répartir la charge.
-
-8. **Pourquoi utilise-t-on des labels Docker ?**  
-   Pour attacher directement les règles Traefik aux conteneurs au sein du fichier `docker-compose.yml`, éliminant ainsi le besoin de fichiers de configuration manuels et statiques.
-
-9. **Quel est l’intérêt de `exposedByDefault: false` ?**  
-   Garantir la sécurité en n'exposant que les conteneurs explicitement annotés avec `traefik.enable=true`.
-
-10. **Comment Traefik peut-il découvrir automatiquement un nouveau conteneur ?**  
-    En écoutant le flux d'événements Docker via `/var/run/docker.sock`.
-
-11. **Quelle est la différence entre routage et Load Balancing ?**  
-    Le routage choisit l'application destinataire (ex: App1 vs App2). Le Load Balancing choisit l'instance au sein de cette application (ex: App1-Instance A vs App1-Instance B).
-
-12. **Pourquoi faut-il surveiller la santé des backends ?**  
-    Pour éviter d'envoyer des requêtes vers un conteneur en panne ou en surcharge, assurant une disponibilité continue aux utilisateurs.
-
-13. **Pourquoi le dashboard doit-il être protégé ?**  
-    Parce qu'il expose la structure interne, les routes, les adresses réseau privées et l'état des services, ce qui constitue une fuite d'informations critique.
-
-14. **Pourquoi un router TLS ne garantit-il pas à lui seul un certificat valide ?**  
-    `tls=true` ordonne seulement à Traefik de négocier du TLS (souvent avec un certificat auto-signé). Un certificat valide exige une autorité de certification de confiance (ex: Let's Encrypt).
-
-15. **Comment ajouter une nouvelle instance backend sans changer le point d’entrée client ?**  
-    En démarrant un nouveau conteneur portant le même nom de service Traefik (`traefik.http.services.<nom>...`). Traefik l'ajoute automatiquement au pool du load balancer sans interrompre le trafic ni modifier l'URL publique.
+* Dashboard Traefik : [http://localhost:8080/dashboard/](http://localhost:8080/dashboard/)
+* App1 (Load balanced entre app1 et app1b) : `http://app1.localhost`
+* App2 : `http://app2.localhost`
