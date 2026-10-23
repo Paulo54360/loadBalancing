@@ -7,9 +7,10 @@ test:
   image: python:3.11-slim
   variables:
     GATEWAY_TOKEN: "ci-test-token"
+    PYTHONPATH: "."
   script:
     - pip install --no-cache-dir -r gateway/requirements.txt pytest
-    - pytest -q
+    - python -m pytest -q
 
 build:
   stage: build
